@@ -1,4 +1,4 @@
-anthropic>=0.69
+litellm>=1.50
 langgraph>=0.2
 streamlit>=1.40
 pydantic>=2.7

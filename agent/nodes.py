@@ -1,26 +1,23 @@
 """파이프라인 노드: 가드레일 → 분석가 → 작성자 → 검증자.
 
-각 노드는 LangGraph state(dict)를 받아 갱신할 부분만 반환한다.
-API 키는 환경변수가 아니라 state["api_key"](= 접속자가 UI에 입력한 키)로 전달되며,
-노드마다 그 키로 일회용 클라이언트를 만들어 호출한다.
+LLM 호출은 litellm으로 추상화 — Anthropic·OpenAI·Gemini 등 어떤 공급자든 동일 인터페이스.
+모델 문자열과 API 키는 state["model"], state["api_key"](= 접속자가 UI에 입력)로 전달된다.
 """
 import io
 from typing import Any, Dict
 
-import anthropic
+import litellm
 import pandas as pd
 
-from .config import MAX_REVISIONS, MODEL, load_rules, load_template
+from .config import MAX_REVISIONS, load_rules, load_template
 from .schemas import AnalysisResult, VerdictResult
+
+# 구조화 출력 시 스키마 검증을 강제(지원 공급자에서)
+litellm.enable_json_schema_validation = True
 
 REQUIRED_COLUMNS = ["항목", "측정값", "단위", "기준", "판정"]
 # CSV 인젝션(수식 주입) 차단용 선행 문자
 _FORMULA_PREFIXES = ("=", "+", "-", "@")
-
-
-def _client_for(api_key: str) -> anthropic.Anthropic:
-    """접속자가 입력한 키로 일회용 클라이언트 생성."""
-    return anthropic.Anthropic(api_key=api_key)
 
 
 def _system(role: str) -> str:
@@ -28,31 +25,45 @@ def _system(role: str) -> str:
     return f"{role}\n\n[반드시 지킬 작업 수칙]\n{load_rules()}"
 
 
-def _parse(api_key: str, role: str, user: str, schema):
+def _extract_json(text: str) -> str:
+    """응답에서 JSON 객체 본문만 추출(코드펜스/잡설 제거)."""
+    s, e = text.find("{"), text.rfind("}")
+    return text[s : e + 1] if s != -1 and e != -1 else text
+
+
+def _messages(role: str, user: str):
+    return [
+        {"role": "system", "content": _system(role)},
+        {"role": "user", "content": user},
+    ]
+
+
+def _parse(state: Dict[str, Any], role: str, user: str, schema):
     """구조화 출력 호출 — schema(Pydantic)로 응답을 강제·검증."""
-    resp = _client_for(api_key).messages.parse(
-        model=MODEL,
+    resp = litellm.completion(
+        model=state["model"],
+        api_key=state["api_key"],
+        messages=_messages(role, user),
         max_tokens=8000,
-        system=_system(role),
-        messages=[{"role": "user", "content": user}],
-        output_format=schema,
+        response_format=schema,
     )
-    return resp.parsed_output
+    content = resp.choices[0].message.content or ""
+    return schema.model_validate_json(_extract_json(content))
 
 
-def _text(api_key: str, role: str, user: str) -> str:
+def _text(state: Dict[str, Any], role: str, user: str) -> str:
     """자유 형식(마크다운) 호출."""
-    resp = _client_for(api_key).messages.create(
-        model=MODEL,
+    resp = litellm.completion(
+        model=state["model"],
+        api_key=state["api_key"],
+        messages=_messages(role, user),
         max_tokens=8000,
-        system=_system(role),
-        messages=[{"role": "user", "content": user}],
     )
-    return "".join(b.text for b in resp.content if b.type == "text")
+    return resp.choices[0].message.content or ""
 
 
 # ---------------------------------------------------------------------------
-# 1) 가드레일 (hooks 역할) — 위험·이상 입력을 분석 전에 차단 (API 호출 없음)
+# 1) 가드레일 (hooks 역할) — 위험·이상 입력을 분석 전에 차단 (LLM 호출 없음)
 # ---------------------------------------------------------------------------
 def guardrail_node(state: Dict[str, Any]) -> Dict[str, Any]:
     csv_text = state.get("csv_text", "") or ""
@@ -97,7 +108,7 @@ def analyst_node(state: Dict[str, Any]) -> Dict[str, Any]:
         f"[현장 메모]\n{state.get('memo_text') or '(없음)'}\n\n"
         "위 자료를 분석해 항목별로 정리하고, 특이사항과 후속조치를 도출하라."
     )
-    result: AnalysisResult = _parse(state["api_key"], role, user, AnalysisResult)
+    result: AnalysisResult = _parse(state, role, user, AnalysisResult)
     return {"analysis": result.model_dump()}
 
 
@@ -123,7 +134,7 @@ def writer_node(state: Dict[str, Any]) -> Dict[str, Any]:
         f"[분석 결과(JSON)]\n{state['analysis']}\n\n"
         "이 분석 결과로 보고서 초안을 작성하라. 양식의 4개 섹션을 모두 채워라." + feedback_text
     )
-    draft = _text(state["api_key"], role, user)
+    draft = _text(state, role, user)
     return {"draft": draft, "revision_count": state.get("revision_count", 0) + (1 if feedback_text else 0)}
 
 
@@ -142,7 +153,7 @@ def verifier_node(state: Dict[str, Any]) -> Dict[str, Any]:
         f"[검증 대상 보고서]\n{state['draft']}\n\n"
         "보고서의 모든 수치를 원본과 대조하고, 양식 섹션 누락과 작업 수칙 위반(출처 없는 % 등)을 점검하라."
     )
-    result: VerdictResult = _parse(state["api_key"], role, user, VerdictResult)
+    result: VerdictResult = _parse(state, role, user, VerdictResult)
     return {"verdict": result.model_dump()}
 
 
