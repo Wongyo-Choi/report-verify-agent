@@ -38,6 +38,10 @@ def _messages(role: str, user: str):
     ]
 
 
+# 무료 티어의 일시적 분당 한도(429)를 스스로 넘기도록 자동 재시도(지수 백오프)
+_NUM_RETRIES = 4
+
+
 def _parse(state: Dict[str, Any], role: str, user: str, schema):
     """구조화 출력 호출 — schema(Pydantic)로 응답을 강제·검증."""
     resp = litellm.completion(
@@ -46,6 +50,7 @@ def _parse(state: Dict[str, Any], role: str, user: str, schema):
         messages=_messages(role, user),
         max_tokens=8000,
         response_format=schema,
+        num_retries=_NUM_RETRIES,
     )
     content = resp.choices[0].message.content or ""
     return schema.model_validate_json(_extract_json(content))
@@ -58,6 +63,7 @@ def _text(state: Dict[str, Any], role: str, user: str) -> str:
         api_key=state["api_key"],
         messages=_messages(role, user),
         max_tokens=8000,
+        num_retries=_NUM_RETRIES,
     )
     return resp.choices[0].message.content or ""
 
