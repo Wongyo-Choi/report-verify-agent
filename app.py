@@ -12,13 +12,18 @@ import litellm
 import pandas as pd
 import streamlit as st
 
+import theme
 from agent.config import PROVIDERS, build_model_string, load_rules, load_template
 from agent.graph import stream_pipeline
 
 ROOT = Path(__file__).resolve().parent
 
-st.set_page_config(page_title="검증형 리포트 에이전트", page_icon="🔬", layout="wide")
-st.title("🔬 검증형 시험데이터 리포트 에이전트")
+st.set_page_config(page_title="J.A.R.V.I.S. · 리포트 에이전트", page_icon="🛡️", layout="wide")
+theme.inject()       # JARVIS 다크 HUD 테마
+theme.boot_once()    # 첫 접속 부팅 로딩 화면
+theme.header()       # 아크 원자로 + JARVIS 라벨
+
+st.title("🛡️ 검증형 시험데이터 리포트 에이전트")
 st.caption(
     "분석 → 보고서 작성 → 독립 검증 → 사람 승인. "
     "하네스 엔지니어링(가드레일·분업·검문소)을 LangGraph + 멀티 LLM으로 구현."
