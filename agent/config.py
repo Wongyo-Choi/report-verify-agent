@@ -22,7 +22,7 @@ PROVIDERS = {
     },
     "Google (Gemini)": {
         "prefix": "gemini/",
-        "models": ["gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"],
+        "models": ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.5-pro"],
         "key_hint": "AIza...",
         "key_url": "https://aistudio.google.com/apikey",
     },
